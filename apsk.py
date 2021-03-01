@@ -3,7 +3,7 @@ from matplotlib import pyplot as plt
 from sigproc import Signal
 from scipy.signal import butter, lfilter, freqs, firwin, fftconvolve
 from scipy.fftpack import fft, ifft, fftshift
-
+from commpy.filters import rcosfilter
 
 #################################
 class Apsk:
@@ -14,9 +14,7 @@ class Apsk:
             baud_rate = 10,
             bits_per_baud = 1,
             carrier_freq = 100):
-        '''
-        Create a modulator using OOK by default
-        '''
+
         self.modulation    = modulation
         self.baud_rate     = baud_rate
         self.bits_per_baud = bits_per_baud
@@ -24,23 +22,28 @@ class Apsk:
 
         self.constellation = [(a*np.cos(p/180.0*np.pi), a*np.sin(p/180.0*np.pi), t) for t, (a, p) in modulation.items()]
 
+        self.sI = []
+        self.sQ = []
+
     #################################
-    def modulate_signal(self, data):
+    def modulate_signal(self, data, savefile=None, lvl_noise=None, shift_dopler=0):
         '''
         Generate signal corresponding to the current modulation scheme to
         represent given binary string, data.
         '''
         def create_func(data):
             slot_data = []
+            shift = [0, 90, 180, 270]
+            shift_phase = shift[np.random.randint(0, 4)] / 180.0 * np.pi
+            # shift_phase = 0 / 180.0 * np.pi
+            print("Начальная фаза:", shift_phase/np.pi * 180)
             for i in range(0, len(data), self.bits_per_baud):
                 slot_data.append(self.modulation[data[i:i+self.bits_per_baud]])
 
             def timefunc(t):
                 slot = int(t*self.baud_rate)
-                start = float(slot)/self.baud_rate
-                offset = t #- start
                 amplitude, phase = slot_data[slot]
-                freq = 2 * np.pi * self.carrier_freq * offset
+                freq = 2 * np.pi * (self.carrier_freq + shift_dopler) * t + shift_phase
                 freq = freq if freq < 2 * np.pi else freq - 2 * np.pi
                 return amplitude*np.sin(freq + phase/180.0 * np.pi)
 
@@ -49,61 +52,133 @@ class Apsk:
         func = create_func(data)
         duration = float(len(data))/(self.baud_rate*self.bits_per_baud)
         s = Signal(duration=duration, carrier_freq=self.carrier_freq, func=func)
+
+        if lvl_noise is not None:
+            s.addNoise(lvl_noise)
+
+        if savefile:
+            s.write_wav(savefile)
+
         return s
 
     #################################
-    def lowpass_filter(self, data, order=5, filter='zero'):
+    def demodulate_signal(self, readfile, preambul):
+        m_signal = Signal(carrier_freq=self.carrier_freq)
+        m_signal.read_wav(readfile)
 
-        def butter_lowpass(order, cutoff, fs):
-            nyq_fs = 0.5*fs
-            b, a = butter(order, 0.5, btype='low')
-            return b, a
-
-        if filter == 'butter':
-            cutoff = float(self.carrier_freq)
-            b, a = butter_lowpass(order, cutoff, 1000)
-            y = lfilter(b, a, data)
-            return y
-
-        if filter == 'zero':
-            f_data = fft(data)
-            f_data[100:] = 0
-            data = ifft(f_data)
-            return data
-
-
-    #################################
-    def identify_symbol(self, symbol):
-        min_dist = 0
-
-    #################################
-    def demodulate_signal(self, signal):
-        sig = signal.signal
-        n = len(sig)
-        I = np.zeros(n, dtype=float)
-        Q = np.zeros(n, dtype=float)
-        for i in range(n):
-            offset = float(i)/signal.sampling_rate
-            freq = 2 * np.pi * self.carrier_freq * offset
+        def timefunc(t, sig):
+            freq = 2 * np.pi * self.carrier_freq * t
             freq = freq if freq < 2 * np.pi else freq - 2 * np.pi
-            I[i] = 2*sig[i]*np.cos(freq)
-            Q[i] = 2*sig[i]*np.sin(freq)
-        n_taps = 640 * 2
-        h = firwin(n_taps // 8, float(self.carrier_freq / 160), nyq=float(self.carrier_freq / 2))
-        # I, Q = self.lowpass_filter(I), self.lowpass_filter(Q)
-        I, Q = lfilter(h, 1.0, I), lfilter(h, 1.0, Q)
-        signal.set_IQ_components(I, Q)
-        step = int(n/(signal.duration * self.baud_rate))
+            I = 2*sig*np.cos(freq)
+            Q = 2*sig*np.sin(freq)
+            return I, Q
+
+        n = m_signal.get_len_signal()
+        I, Q = m_signal.getShiftFreqSignal(timefunc, n)
+
+        def lowpass_filter(I, Q, numtaps, cutoff, N, Ts, Fs, alpha=0.35):
+
+            h = firwin(numtaps, cutoff, nyq=float(self.carrier_freq / 2))
+            I, Q = lfilter(h, 1.0, I), lfilter(h, 1.0, Q)
+
+            sPSF = rcosfilter(N, alpha, Ts, Fs)[1]
+            I, Q = np.convolve(sPSF, I, mode='same'), np.convolve(sPSF, Q, mode='same')
+
+            return I, Q
+
+        n = m_signal.get_len_signal()
+        duration = m_signal.get_duration()
+
+        cutoff = float(self.carrier_freq / 24)
+        N = n // self.baud_rate
+        simbol_period = 1 / self.baud_rate
+        I, Q = lowpass_filter(I, Q, 255, cutoff, N, simbol_period, 0.0000001)
+
+        m_signal.set_IQ_components(I, Q)
+
+        step = int(N/duration)
         c_data = np.arange(step//2, n, step)
-        i_value, q_value = I[c_data], Q[c_data]
-        return i_value, q_value
+
+        bits = self.component_to_bits(I[c_data], Q[c_data], preambul)
+        print(bits[:])
+
+        return m_signal
 
     #################################
-    def plot_constellation(self, r, s=None, q=None):
+    def component_to_bits(self, iSamples, qSamples, preambul):
+        coef_dempf = 6
+        alpha = None
+        bits = []
+        shift_phase = 0
+        count_bit = 0
+        constellation = self.modulation.copy()
+
+        def getChangedPhaseModulation(phi0):
+            for symbol in self.modulation:
+                self.modulation[symbol] = (self.modulation[symbol][0], self.modulation[symbol][1] + phi0)
+            return list(self.modulation.values())
+
+        def nearest_value(values: list, one: (float, int)) -> (float, int):
+            return min(values, key=lambda n: (abs((one[0] - n[0])**2 + (one[1] - n[1])**2), n))
+
+        def get_key(d, val):
+            for k, v in d.items():
+                if v == val:
+                    return k
+
+        for (i, q) in zip(iSamples, qSamples):
+            if i > 0:
+                curr_phase = (90 - np.arctan(q/i)/np.pi * 180 if np.arctan(q/i)/np.pi * 180 > 0 else 90 - np.arctan(q/i)/np.pi * 180)
+            else:
+                curr_phase = (270 - np.arctan(q / i) / np.pi * 180 if np.arctan(q / i) / np.pi * 180 > 0 else 270 - np.arctan(q / i) / np.pi * 180)
+
+            ######Восстановление начальной фазы#######
+            if count_bit < len(preambul):
+                key = preambul[count_bit:count_bit + self.bits_per_baud]
+                dif_phase = curr_phase - self.modulation[key][1]
+                if dif_phase < 0:
+                    dif_phase = 360 - np.abs(dif_phase)
+                shift_phase += np.abs(dif_phase) * self.bits_per_baud / len(preambul)
+                count_bit += self.bits_per_baud
+            else:
+                print("Сдвиг фазы", shift_phase)
+                if curr_phase - shift_phase < 0:
+                    ph0 = 360 - shift_phase
+                    curr_phase = curr_phase + ph0
+                else:
+                    curr_phase -= shift_phase
+
+            self.setIQSamles(i, q)
+
+            ###Адаптивный алгоритм декодирования сигналов на основе фильтра автоподстройки фазы### - (не работает)
+            if alpha is None:
+                alpha = 0
+            # else:
+            #     pre_phase = constellation[bits[-1]][1]
+            #     if curr_phase > alpha + pre_phase:
+            #         alpha += coef_dempf
+            #     elif curr_phase < alpha + pre_phase:
+            #         alpha -= coef_dempf
+
+            amplitude = np.sqrt(i**2 + q**2)
+            modulation_value = getChangedPhaseModulation(alpha)
+            value = nearest_value(modulation_value, (amplitude, curr_phase))
+            bits.append(get_key(self.modulation, value))
+
+        return bits
+
+    #################################
+    def setIQSamles(self, i, q):
+        self.sI.append(i)
+        self.sQ.append(q)
+
+    #################################
+    def plot_constellation(self, r):
+
         sx, sy, t = zip(*self.constellation)
         plt.clf()
         plt.scatter(sx, sy, s=30)
-        plt.scatter(s, q, s=10, c='deeppink')
+        plt.scatter(self.sQ, self.sI, s=10, c='deeppink')
         plt.axes().set_aspect('equal')
         for x, y, t in self.constellation:
             plt.annotate(t, (x-.04, y-.04), ha='right', va='top')

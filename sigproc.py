@@ -3,6 +3,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from scipy.fftpack import fft, ifft
 from scipy.io import wavfile
+from commpy.filters import rrcosfilter
 
 plt.rc('font', family='Sawasdee', weight='bold')
 plt.rc('axes', unicode_minus=False)
@@ -24,8 +25,8 @@ class Signal(object):
         self.freqs = np.arange(int(duration*sampling_rate), dtype=complex)
         self.signal = np.arange(int(duration*sampling_rate), dtype=np.float64)
         self.freqs[:] = 0j
-        self.I = np.zeros(1200000)
-        self.Q = np.zeros(1200000)
+        self.I = []
+        self.Q = []
         if func is not None:
             self.t=self.sample_time_function(func)
 
@@ -59,18 +60,35 @@ class Signal(object):
 
         return self.duration
 
+    def get_len_signal(self):
+
+        return len(self.signal)
+
     #######################################
     def sample_time_function(self, func):
-
-        n = len(self.freqs)
-        t = []
+        n = self.get_len_signal()
         signal = np.zeros(n, dtype=float)
         for i in range(n):
             signal[i] = func(float(i)/self.sampling_rate)
-            t.append(float(i)/self.sampling_rate)
-        self.signal = signal
-        self.freqs = fft(signal)
-        return t
+            self.signal = signal
+            self.freqs = fft(signal)
+
+    #######################################
+    def getShiftFreqSignal(self, func, n):
+        shift_I_component = np.zeros(n, dtype=float)
+        shift_Q_component = np.zeros(n, dtype=float)
+
+        for i in range(n):
+            shift_I_component[i], shift_Q_component[i] = func(float(i) / self.sampling_rate, self.signal[i])
+        return shift_I_component, shift_Q_component
+
+    #######################################
+    def addNoise(self, noise_level_db):
+        noise_avg_watts = 10 ** (noise_level_db / 10.)
+        m_noise = np.random.normal(0, noise_avg_watts, len(self.signal))
+        n = m_noise
+        sig = self.signal
+        self.signal = sig + n
 
     #######################################
     def set_IQ_components(self, I, Q):
