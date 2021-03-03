@@ -44,8 +44,9 @@ if __name__ == '__main__':
     # preambul = "0110010001100100011001000110010001100100"
     q1 = Apsk(baud_rate=1000, bits_per_baud=4, carrier_freq=freq, modulation=modulation)
     print(bits)
+    # bits = '11001100110011001100110011001100'
     bits = preambul + bits
-    m_signal = q1.modulate_signal(bits, savefile='3.wav', lvl_noise=None, shift_dopler=0)
+    m_signal = q1.modulate_signal(bits, savefile='3.wav', lvl_noise=None, shift_dopler=10)
     # plt.figure(1)
     # m_signal.plot(dB=False, phase=False, stem=True, frange=(0, 100000))
 

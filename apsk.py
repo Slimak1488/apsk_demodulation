@@ -21,7 +21,7 @@ class Apsk:
         self.carrier_freq  = carrier_freq
 
         self.constellation = [(a*np.cos(p/180.0*np.pi), a*np.sin(p/180.0*np.pi), t) for t, (a, p) in modulation.items()]
-
+        self.cm = []
         self.sI = []
         self.sQ = []
 
@@ -100,23 +100,26 @@ class Apsk:
         c_data = np.arange(step//2, n, step)
 
         bits = self.component_to_bits(I[c_data], Q[c_data], preambul)
-        print(bits[:])
+        print(bits[10:])
 
         return m_signal
 
     #################################
     def component_to_bits(self, iSamples, qSamples, preambul):
-        coef_dempf = 6
-        alpha = None
+        coef_dempf = 4
+        alpha = 0
         bits = []
         shift_phase = 0
         count_bit = 0
-        constellation = self.modulation.copy()
 
         def getChangedPhaseModulation(phi0):
-            for symbol in self.modulation:
-                self.modulation[symbol] = (self.modulation[symbol][0], self.modulation[symbol][1] + phi0)
-            return list(self.modulation.values())
+            constellation = self.modulation.copy()
+            for symbol in constellation:
+                phi = constellation[symbol][1] + phi0
+                if phi > 360:
+                    phi -= 360
+                constellation[symbol] = (constellation[symbol][0], phi)
+            return constellation
 
         def nearest_value(values: list, one: (float, int)) -> (float, int):
             return min(values, key=lambda n: (abs((one[0] - n[0])**2 + (one[1] - n[1])**2), n))
@@ -126,16 +129,18 @@ class Apsk:
                 if v == val:
                     return k
 
+        prev_constellation = self.modulation.copy()
+
         for (i, q) in zip(iSamples, qSamples):
             if i > 0:
-                curr_phase = (90 - np.arctan(q/i)/np.pi * 180 if np.arctan(q/i)/np.pi * 180 > 0 else 90 - np.arctan(q/i)/np.pi * 180)
+                curr_phase = (90 - np.arctan(q/i)/np.pi * 180 if np.arctan(q/i)/np.pi * 180 > 0 else 90 - np.arctan(q/i) / np.pi * 180)
             else:
                 curr_phase = (270 - np.arctan(q / i) / np.pi * 180 if np.arctan(q / i) / np.pi * 180 > 0 else 270 - np.arctan(q / i) / np.pi * 180)
 
-            ######Восстановление начальной фазы#######
+            #####Восстановление начальной фазы#######
             if count_bit < len(preambul):
                 key = preambul[count_bit:count_bit + self.bits_per_baud]
-                dif_phase = curr_phase - self.modulation[key][1]
+                dif_phase = curr_phase - prev_constellation[key][1]
                 if dif_phase < 0:
                     dif_phase = 360 - np.abs(dif_phase)
                 shift_phase += np.abs(dif_phase) * self.bits_per_baud / len(preambul)
@@ -148,22 +153,35 @@ class Apsk:
                 else:
                     curr_phase -= shift_phase
 
-            self.setIQSamles(i, q)
-
-            ###Адаптивный алгоритм декодирования сигналов на основе фильтра автоподстройки фазы### - (не работает)
-            if alpha is None:
-                alpha = 0
-            # else:
-            #     pre_phase = constellation[bits[-1]][1]
-            #     if curr_phase > alpha + pre_phase:
-            #         alpha += coef_dempf
-            #     elif curr_phase < alpha + pre_phase:
-            #         alpha -= coef_dempf
+                self.setIQSamles(i, q)
 
             amplitude = np.sqrt(i**2 + q**2)
-            modulation_value = getChangedPhaseModulation(alpha)
-            value = nearest_value(modulation_value, (amplitude, curr_phase))
-            bits.append(get_key(self.modulation, value))
+            curr_constellation = getChangedPhaseModulation(alpha)
+            value = nearest_value(curr_constellation.values(), (amplitude, curr_phase))
+            bits.append(get_key(curr_constellation, value))
+
+            prev_constellation = curr_constellation.copy()
+
+            ###Адаптивный алгоритм декодирования сигналов на основе фильтра автоподстройки фазы###
+            d_phase = self.modulation[bits[-1]][1] + alpha
+
+            if alpha > 0:
+                d_phase = d_phase if d_phase < 360 else 360 - d_phase
+            elif alpha < 0:
+                d_phase = d_phase if d_phase > 0 else 360 + d_phase
+
+            if curr_phase >= d_phase:
+                alpha += coef_dempf
+            elif curr_phase < d_phase:
+                alpha -= coef_dempf
+
+            if alpha > 360:
+                alpha -= 360
+            if alpha < -360:
+                alpha += 360
+
+            c = [(a * np.cos(p / 180.0 * np.pi), a * np.sin(p / 180.0 * np.pi), t) for t, (a, p) in curr_constellation.items()]
+            self.cm.append(c)
 
         return bits
 
@@ -180,8 +198,11 @@ class Apsk:
         plt.scatter(sx, sy, s=30)
         plt.scatter(self.sQ, self.sI, s=10, c='deeppink')
         plt.axes().set_aspect('equal')
+        for con in self.cm:
+            for x, y, t in con:
+                plt.scatter(x, y, s=5, c='green')
         for x, y, t in self.constellation:
-            plt.annotate(t, (x-.04, y-.04), ha='right', va='top')
+            plt.annotate(t, (x - .04, y - .04), ha = 'right', va = 'top')
         plt.axis([-r, r, -r, r])
         plt.axhline(0, color='red')
         plt.axvline(0, color='red')
