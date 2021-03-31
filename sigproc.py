@@ -12,7 +12,7 @@ plt.rc('axes', unicode_minus=False)
 class Signal(object):
 
     #######################################
-    def __init__(self, duration=1.0, sampling_rate=1000000, carrier_freq=0, func=None):
+    def __init__(self, duration=1.0, sampling_rate=500000, carrier_freq=0, func=None):
         '''
         Initialize a signal object with the specified duration (in seconds)
         and sampling rate (in Hz).  If func is provided, signal
@@ -45,10 +45,11 @@ class Signal(object):
     #######################################
     def write_wav(self, wav_file):
 
+        normalized_signal = self.signal / np.abs(self.signal).max()
         wavfile.write(
                 wav_file, 
                 self.sampling_rate, 
-                (self.signal).astype(np.dtype('float64')))
+                self.signal.astype(np.dtype('float32')))
 
     #######################################
     def get_sampling_rate(self):
