@@ -43,11 +43,11 @@ def test1():
 
     freq = 48000
 
-    preambul = "011001010110110001010110010101100101011001011011101111110010011011001111100111011111000011100111"
+    preambul = "00001111001011010011110000011110"
     q1 = Apsk(baud_rate=1000, bits_per_baud=4, carrier_freq=freq, modulation=modulation)
-    print(symbols)
-    # bits = '11001100110011001100110011001100'
-    symbols = "0000110000010101110100101010110000100111100111111110111110010011011001111100111011111000011100111110111110000111000011000011000011000000"
+    symbols = "0000110000010101110101001101001010101100001001111001111111101111100100110110011111001110111110000111001111101111100001110000110000110000010011000000"
+    i = np.random.randint(4, (len(symbols)-4)//4)
+    symbols = symbols[:4*i] + preambul + symbols[4*i:]
     print(symbols)
     m_signal = q1.modulate_signal(symbols, savefile='3.wav', lvl_noise=None, shift_dopler=0)
     plt.figure(1)
@@ -93,7 +93,36 @@ def test2():
 
     plt.show()
 
+def test3():
+    preambul = "00001111001011010011110000011110"
+    y_axis = []
+    freq = 48000
+    maxshiftPhase = 360
+    x_axis = range(maxshiftPhase)
+    for phase in x_axis:
+        bits = np.random.randint(0, 2, 200)
+        symbols = ''
+        for bit in bits:
+            symbols += str(bit)
+        i = np.random.randint(4, (len(symbols) - 4) // 4)
+        symbols = symbols[:4 * i] + preambul + symbols[4 * i:]
+        q1 = Apsk(baud_rate=1000, bits_per_baud=4, carrier_freq=freq, modulation=modulation)
+        q1.modulate_signal(symbols, savefile='3.wav', lvl_noise=None, phase0=phase, shift_dopler=0)
+        q2 = Apsk(baud_rate=1000, bits_per_baud=4, carrier_freq=freq, modulation=modulation)
+        q2.demodulate_signal('3.wav', preambul)
+        demod_symbols = q2.getDemodulateSymbols()
+        # y_axis.append(q2.dif)
+        if symbols[:-4] == demod_symbols:
+            y_axis.append(1)
+        else:
+            print("Входная последовательность:", symbols)
+            print("Выходная последовательность:", demod_symbols)
+            y_axis.append(0)
+
+    plt.plot(x_axis, y_axis)
+    plt.show()
 
 if __name__ == '__main__':
     test1()
     # test2()
+    # test3()

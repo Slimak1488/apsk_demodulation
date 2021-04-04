@@ -2,7 +2,7 @@ import numpy as np
 from numpy import sqrt, pi
 from matplotlib import pyplot as plt
 from sigproc import Signal
-from scipy.signal import butter, lfilter, freqs, firwin, fftconvolve
+from scipy.signal import butter, lfilter, freqs, firwin, fftconvolve, medfilt
 from scipy.fftpack import fft, ifft, fftshift
 from commpy.filters import rcosfilter
 
@@ -27,6 +27,7 @@ class Apsk:
         self.Q = []
         self.sI = []
         self.sQ = []
+        self.dif = 0
         self.shift_phase_r1 = 0
         self.shift_phase_r2 = 0
         self.out_symbols = ''
@@ -43,12 +44,13 @@ class Apsk:
         '''
         def create_func(data):
             slot_data = []
-            if phase0:
+            if phase0 is not None:
+                print(phase0)
                 shift_phase = phase0 / 180.0 * pi
             else:
                 shift_phase = np.random.uniform(pi / 12, 2 * pi)
-                shift_phase = 40 / 180.0 * pi
-                # print("Начальная фаза:", shift_phase/pi * 180)
+                shift_phase = 201/180*pi
+                # print("Началная фаза:", shift_phase/pi * 180)
             for i in range(0, len(data), self.bits_per_baud):
                 slot_data.append(self.modulation[data[i:i+self.bits_per_baud]])
 
@@ -113,23 +115,31 @@ class Apsk:
 
         m_signal.set_IQ_components(I, Q)
 
-        # print(self.shift_phase_r1/pi*180/12)
-        # print(self.shift_phase_r2/pi*180/4)
-        count_bits = duration*self.baud_rate
-        self.component_to_bits(I[::50], Q[::50], count_bits)
-        bits = self.component_to_bits(I[::50], Q[::50], count_bits, self.setIQSamles)
-        self.component_to_bits(I, Q, count_bits, self.setIQ)
-
+        self.component_to_bits(I[::50], Q[::50])
+        bits = self.component_to_bits(I[::50], Q[::50], self.setIQSamles)
+        # self.component_to_bits(I, Q, self.setIQ)
+        for s in bits[1:]:
+            self.out_symbols += str(s)
+        phase = self.findPhaseInversion(preambul)
+        print("phase", phase)
+        if phase == -1:
+            phase = 0
+        self.shift_phase_r1 -= phase
+        self.shift_phase_r2 -= phase
+        self.sI.clear()
+        self.sQ.clear()
+        bits = self.component_to_bits(I[::50], Q[::50], self.setIQSamles)
+        self.out_symbols = ''
         for s in bits[1:]:
             self.out_symbols += str(s)
 
         return m_signal
 
     #################################
-    def component_to_bits(self, iSamples, qSamples, count_bits, printFunc=None):
+    def component_to_bits(self, iSamples, qSamples, printFunc=None):
         coef_dempf = 3.6
-        alpha = 0
-        beta = 0
+        alpha = []
+        beta = []
         bits = []
 
         def getChangedPhaseModulation(phi0):
@@ -141,15 +151,7 @@ class Apsk:
                 constellation[symbol] = (constellation[symbol][0], phi)
             return constellation
 
-        def nearest_value(values: list, one: (float, int)) -> (float, int):
-            return min(values, key=lambda n: (abs((one[0] - n[0])**2 + (one[1] - n[1])**2), n))
-
-        def get_key(d, val):
-            for k, v in d.items():
-                if v == val:
-                    return k
-
-        prev_constellation = self.modulation.copy()
+        # prev_constellation = self.modulation.copy()
 
         for (i, q) in zip(iSamples, qSamples):
             if i > 0:
@@ -167,30 +169,63 @@ class Apsk:
             if phase < 0:
                 phase += 2*pi
 
+            if phase > 2*pi:
+                phase -= 2*pi
+
             if printFunc:
                 printFunc(amplitude, phase)
 
             curr_constellation = getChangedPhaseModulation(0)
-            value = nearest_value(curr_constellation.values(), (amplitude, phase))
-            bits.append(get_key(curr_constellation, value))
+            value = self.nearest_value(curr_constellation.values(), (amplitude, phase))
+            bits.append(self.getKey(curr_constellation, value))
 
-            if amplitude > sqrt(7):
-                alpha += (curr_constellation[bits[-1]][1] - phase) / count_bits
+            if amplitude > 2*sqrt(7):
+                alpha.append(curr_constellation[bits[-1]][1] - phase)
             else:
-                beta += (curr_constellation[bits[-1]][1] - phase) / count_bits
+                beta.append(curr_constellation[bits[-1]][1] - phase)
 
-            prev_constellation = curr_constellation.copy()
+            # prev_constellation = curr_constellation.copy()
 
         if printFunc is None:
-            self.shift_phase_r1 = alpha / 12
-            self.shift_phase_r2 = beta / 4
+            self.shift_phase_r1 = np.median(alpha)
+            self.shift_phase_r2 = np.median(beta)
+
+            pos_alpha = [i for i in alpha if i > 0]
+            neg_alpha = [i for i in alpha if i < 0]
+
+            if np.median(pos_alpha) >= pi / 13.6 and np.median(neg_alpha) <= -pi / 13.6:
+                if -sum(neg_alpha)/len(neg_alpha) >= sum(pos_alpha)/len(pos_alpha):
+                    self.shift_phase_r1 = np.median(neg_alpha)
+                else:
+                    self.shift_phase_r1 = np.median(pos_alpha)
+
+            pos_beta = [i for i in beta if i > 0]
+            neg_beta = [i for i in beta if i < 0]
+
+            if np.median(pos_beta) >= pi / 4.6 and np.median(neg_beta) <= -pi / 4.6:
+                if -sum(neg_beta)/len(neg_beta) >= sum(pos_beta)/len(pos_beta):
+                    self.shift_phase_r2 = np.median(neg_beta)
+                else:
+                    self.shift_phase_r2 = np.median(pos_beta)
+
+            if np.abs(self.shift_phase_r1 - self.shift_phase_r2) > 0.91:
+                if self.shift_phase_r1 < 0:
+                    self.shift_phase_r2 -= pi / 2
+                else:
+                    self.shift_phase_r2 += pi / 2
 
             if self.shift_phase_r2 < 0 and np.abs(self.shift_phase_r1 - self.shift_phase_r2) > pi/80:
                 self.shift_phase_r1 -= pi / 6
-                # self.shift_phase_r2 -= pi / 6
+            if self.shift_phase_r2 > 0 and np.abs(self.shift_phase_r1 - self.shift_phase_r2) > pi/80:
+                self.shift_phase_r1 += pi / 6
+
+            print("r1: ", self.shift_phase_r1)
+            print("r2: ", self.shift_phase_r2)
+
+            self.dif = np.abs(self.shift_phase_r1 - self.shift_phase_r2)
+            print(self.dif)
 
         listFreqBits = []
-        d = len(bits)//10
         for i in range(len(bits)//10):
             lfreq = bits[i*10:i*10+10]
             listFreqBits.append(max(set(lfreq), key=lfreq.count))
@@ -207,6 +242,29 @@ class Apsk:
         self.Q.append(a*np.cos(ph))
 
     #################################
+    def findPhaseInversion(self, preamble):
+        for phase in [0, pi/2, pi, 3*pi/2]:
+            rot_preamble = ''
+            for i in range(0, len(preamble), self.bits_per_baud):
+                value = self.modulation[preamble[i:i+self.bits_per_baud]]
+                ph0 = value[1] + phase
+                if ph0 > 2*pi:
+                    ph0 -= 2*pi
+                value = value[0], ph0
+                value = self.nearest_value(self.modulation.values(), (value[0], value[1]))
+                rot_preamble += self.getKey(self.modulation, value)
+            if self.out_symbols.find(rot_preamble) % self.bits_per_baud == 0:
+                return phase
+        return -1
+
+    def nearest_value(self, values: list, one: (float, int)) -> (float, int):
+        return min(values, key=lambda n: (abs((one[0] - n[0]) ** 2 + (one[1] - n[1]) ** 2), n))
+
+    def getKey(self, d, val):
+        for k, v in d.items():
+            if v == val:
+                return k
+
     def getDemodulateSymbols(self):
         return self.out_symbols
 
@@ -220,7 +278,7 @@ class Apsk:
         sx, sy, t = zip(*self.constellation)
         plt.clf()
         plt.scatter(sx, sy, s=20)
-        plt.scatter(self.sQ, self.sI, s=35, c='deeppink')
+        plt.scatter(self.sQ, self.sI, s=15, c='deeppink')
         plt.axes().set_aspect('equal')
         # for con in self.cm:
         #     for x, y, t in con:
