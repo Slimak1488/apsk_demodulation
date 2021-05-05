@@ -1,5 +1,5 @@
 import sys
-from apsk import Apsk
+from apsk import APSKModulator, APSKDemodulator
 from matplotlib import pyplot as plt
 import numpy as np
 from numpy import sqrt, pi, random
@@ -41,26 +41,31 @@ def test1():
     for bit in bits:
         symbols += str(bit)
 
-    freq = 48000
+    carrier_freq = 48000
 
-    preambul = "00001111001011010011110000011110"
-    q1 = Apsk(baud_rate=1000, bits_per_baud=4, carrier_freq=freq, modulation=modulation)
+    preamble = ""
+    # symbols = "010000001100000100001100000101011101010011010010101011000010"#000011000001"
+    # symbols = '01000000001000010010111111000100001111111011100001110111010111110011101001101110111111100101'
+    # symbols = "01000000001000010010111111000100"
+    q1 = APSKModulator(modulation, 1000, 4, carrier_freq)
+    preamble = "0000111100101111110100111100000111100000"
+    symbols = "0000010001010001" #1
+    # symbols = "00101010100000000100010100011010100100011011001111001111010101110110001000101010"
     symbols = "0000110000010101110101001101001010101100001001111001111111101111100100110110011111001110111110000111001111101111100001110000110000110000010011000000"
     i = np.random.randint(4, (len(symbols)-4)//4)
-    symbols = symbols[:4*i] + preambul + symbols[4*i:]
-    print(symbols)
-    m_signal = q1.modulate_signal(symbols, savefile='3.wav', lvl_noise=None, shift_dopler=0)
-    plt.figure(1)
+    symbols = symbols[:4*i] + preamble + symbols[4*i:]
+    m_signal = q1.modulate_signal(symbols, savefile='3.wav', lvl_noise=None, shift_dopler=20)
+    # plt.figure(1)
     # m_signal.plot(dB=False, phase=False, stem=True, frange=(0, 1000))
 
-    q2 = Apsk(baud_rate=1000, bits_per_baud=4, carrier_freq=freq, modulation=modulation)
-    d_signal = q2.demodulate_signal('3.wav', preambul)
+    q2 = APSKDemodulator(modulation, 1000, 4, carrier_freq, preamble, 2*R1)
+    d_signal = q2.demodulate_signal('3.wav')
 
     demod_symbols = q2.getDemodulateSymbols()
     if symbols == demod_symbols:
         print("ОК!!!")
     else:
-        # print("Error!!!")
+        print(symbols)
         print(demod_symbols)
 
     q2.plot_constellation(R2 + 1)
@@ -75,9 +80,9 @@ def test2():
     maxshiftphase = 360
     x_axis = range(maxshiftphase)
     for phase in x_axis:
-        q1 = Apsk(baud_rate=1000, bits_per_baud=4, carrier_freq=freq, modulation=modulation)
+        q1 = APSKModulator(baud_rate=1000, bits_per_baud=4, carrier_freq=freq, modulation=modulation)
         q1.modulate_signal(symbols, savefile='3.wav', lvl_noise=None, phase0=phase, shift_dopler=0)
-        q2 = Apsk(baud_rate=1000, bits_per_baud=4, carrier_freq=freq, modulation=modulation)
+        q2 = APSKDemodulator(baud_rate=1000, bits_per_baud=4, carrier_freq=freq, modulation=modulation)
         q2.demodulate_signal('3.wav', '0000')
         y_r1.append(q2.getShiftPhaseR1())
         y_r2.append(q2.getShiftPhaseR2())

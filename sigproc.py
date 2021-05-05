@@ -49,7 +49,7 @@ class Signal(object):
         wavfile.write(
                 wav_file, 
                 self.sampling_rate, 
-                self.signal.astype(np.dtype('float32')))
+                normalized_signal.astype(np.dtype('float32')))
 
     #######################################
     def get_sampling_rate(self):
